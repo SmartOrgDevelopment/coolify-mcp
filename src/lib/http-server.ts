@@ -14,8 +14,10 @@ import {
   requireBearerAuth,
   type McpHttpHandler,
 } from '@modelcontextprotocol/server';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { CoolifyMcpServer } from './mcp-server.js';
 import { OAuthProvider, OAuthErrorResponse, isClientIdUrl } from './oauth.js';
+import { authorizedCoolifyTokenHashesFromEnv } from './startup-check.js';
 import type { CoolifyConfig } from '../types/coolify.js';
 import type { InstanceRegistry } from './instances.js';
 
@@ -30,6 +32,23 @@ export interface HttpServerConfig {
   refreshTokenTtl: number;
   stateFile: string;
   readonly: boolean;
+  /** SHA-256 digests of Coolify API tokens permitted to authorize HTTP clients. */
+  authorizedCoolifyTokenHashes: readonly Buffer[];
+}
+
+export { authorizedCoolifyTokenHashesFromEnv };
+
+/** Compare a presented token digest to every configured digest without early exit. */
+export function isAuthorizedCoolifyToken(
+  presentedToken: string,
+  authorizedTokenHashes: readonly Buffer[],
+): boolean {
+  const presentedHash = createHash('sha256').update(presentedToken).digest();
+  let authorized = false;
+  for (const allowedHash of authorizedTokenHashes) {
+    authorized = timingSafeEqual(presentedHash, allowedHash) || authorized;
+  }
+  return authorized;
 }
 
 /**
@@ -361,17 +380,26 @@ export function createHttpApp(config: HttpServerConfig): {
       }
 
       const presented = form.get('coolify_token') ?? '';
-      const proof = presented
-        ? await validateCoolifyToken(
-            config.coolify.baseUrl,
-            presented,
-            config.coolify.customHeaders,
-          )
-        : ({ ok: false } as const);
-      // `presented` is not referenced past this line: used once as proof,
-      // then gone. That property is the tier-2 design.
+      form.delete('coolify_token');
+      if (!isAuthorizedCoolifyToken(presented, config.authorizedCoolifyTokenHashes)) {
+        return html(
+          authorizePage(
+            form,
+            validated.client.client_name ?? 'An MCP client',
+            'That token is not authorized for this MCP server. Ask its administrator for access.',
+          ),
+          401,
+        );
+      }
+
+      const proof = await validateCoolifyToken(
+        config.coolify.baseUrl,
+        presented,
+        config.coolify.customHeaders,
+      );
+      // `presented` is not referenced past this line: it was compared as a
+      // digest, used once as proof, then discarded without persistence.
       if (!proof.ok) {
-        form.delete('coolify_token');
         return html(
           authorizePage(
             form,

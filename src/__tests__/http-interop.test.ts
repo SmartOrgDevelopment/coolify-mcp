@@ -10,6 +10,7 @@
  * played by fetch.
  */
 
+import { createHash } from 'node:crypto';
 import { createServer, type Server as NodeHttpServer } from 'node:http';
 import { AddressInfo } from 'node:net';
 import {
@@ -111,6 +112,9 @@ describe('HTTP mode interop with the reference MCP client', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: [
+        Buffer.from(createHash('sha256').update('users-own-coolify-token').digest('hex'), 'hex'),
+      ],
     });
     appFetch = app.fetch;
   });

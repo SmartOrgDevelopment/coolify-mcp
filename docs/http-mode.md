@@ -21,8 +21,8 @@ Everything happens in the Coolify UI. One environment variable selects HTTP
 mode. There are no command overrides and no compose file to write.
 
 1. **+ New Resource → Public Repository**
-   - Repository: `https://github.com/StuMason/coolify-mcp`
-   - Branch: `main` (HTTP mode ships on `main` since 3.0.0).
+   - Repository: `https://github.com/SmartOrgDevelopment/coolify-mcp`
+   - Branch: `fix/http-oauth-token-allowlist`.
    - Build Pack: **Dockerfile**
    - Ports Exposes: **`8080`**
 2. **Domain:** set one, **with the https scheme**: `https://mcp.example.com`.
@@ -30,14 +30,23 @@ mode. There are no command overrides and no compose file to write.
    Do **not** put Cloudflare Access or another login wall in front of it.
    MCP clients cannot log in through one, and the server carries its own
    auth.
-3. **Environment tab**, four variables:
+3. **Environment tab**, five variables:
 
-   | Variable               | Value                                         |
-   | ---------------------- | --------------------------------------------- |
-   | `MCP_TRANSPORT`        | `http`                                        |
-   | `COOLIFY_BASE_URL`     | See reachability note below                   |
-   | `COOLIFY_ACCESS_TOKEN` | A **fresh** token, Keys & Tokens → API tokens |
-   | `MCP_PUBLIC_URL`       | The domain from step 2 (bare domain is fine)  |
+   | Variable                              | Value                                                           |
+   | ------------------------------------- | --------------------------------------------------------------- |
+   | `MCP_TRANSPORT`                       | `http`                                                          |
+   | `COOLIFY_BASE_URL`                    | See reachability note below                                     |
+   | `COOLIFY_ACCESS_TOKEN`                | A **fresh** token, Keys & Tokens → API tokens                   |
+   | `MCP_PUBLIC_URL`                      | The domain from step 2 (bare domain is fine)                    |
+   | `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` | Comma-separated SHA-256 hashes of tokens permitted to authorize |
+
+   HTTP mode fails closed unless this allowlist is configured. Hash each
+   authorized person's Coolify API token without putting the token itself in
+   container configuration:
+
+   ```bash
+   printf %s "$COOLIFY_TOKEN" | shasum -a 256 | cut -d ' ' -f 1
+   ```
 
 4. **Storages tab:** add a **volume** mounted at **`/data`**. Without it,
    every redeploy wipes OAuth state and all your clients have to log in
@@ -107,10 +116,13 @@ Paste this at your assistant:
 
 ```text
 Deploy the coolify-mcp HTTP container on my Coolify:
-create an application from the public repo https://github.com/StuMason/coolify-mcp,
-branch main, dockerfile build pack, port 8080, domain https://mcp.MYDOMAIN.
+create an application from the public repo https://github.com/SmartOrgDevelopment/coolify-mcp,
+branch fix/http-oauth-token-allowlist, dockerfile build pack, port 8080, domain https://mcp.MYDOMAIN.
 Env vars: MCP_TRANSPORT=http, MCP_PUBLIC_URL=mcp.MYDOMAIN,
-COOLIFY_BASE_URL and COOLIFY_ACCESS_TOKEN as I give them to you.
+COOLIFY_BASE_URL and COOLIFY_ACCESS_TOKEN as I give them to you, and
+MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES as the comma-separated SHA-256 hashes of
+the Coolify API tokens that may authorize. Do not store any authorization token
+itself in container configuration.
 Add a persistent volume at /data, enable a health check on /healthz port
 8080, deploy it, then curl /healthz and the oauth-authorization-server
 metadata to prove it's up.
@@ -151,10 +163,11 @@ last good copy, and after that clients re-authorize.
   No client ever receives it.
 - **OAuth 2.1 authenticates the human.** The authorize page asks for your own
   Coolify API token as proof that you have access to this Coolify instance.
-  The container validates it against `GET /teams/current`, then discards it.
-  It is never stored and never used to act. The page tells you to check the
-  address bar before pasting: only your own server should ever ask for a
-  Coolify token.
+  The token's SHA-256 digest must first be in
+  `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES`; only then does the container validate
+  it against `GET /teams/current` and discard it. The token is never stored
+  and never used to act. The page tells you to check the address bar before
+  pasting: only your own server should ever ask for a Coolify token.
 - The client ends up holding a short-lived, revocable MCP token bound to this
   server. Access tokens last 1 hour and refresh silently. Refresh tokens last
   8 hours, so someone removed from Coolify loses MCP access within hours.
@@ -180,24 +193,25 @@ internet-facing service.
 
 ## Configuration reference
 
-| Variable                  | Default                  | Purpose                                                                             |
-| ------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
-| `MCP_TRANSPORT`           | stdio                    | `http` selects HTTP mode                                                            |
-| `COOLIFY_BASE_URL`        | required                 | The Coolify instance to manage                                                      |
-| `COOLIFY_ACCESS_TOKEN`    | required                 | The token the container acts with                                                   |
-| `MCP_PUBLIC_URL`          | required                 | Public https URL of this container                                                  |
-| `MCP_PORT` (or `PORT`)    | `8080`                   | Listen port                                                                         |
-| `MCP_HOST`                | all interfaces           | Listen address; `127.0.0.1` keeps it on loopback                                    |
-| `MCP_READONLY`            | `false`                  | Register only read-only tools                                                       |
-| `MCP_ACCESS_TOKEN_TTL`    | `3600`                   | Access token lifetime, seconds                                                      |
-| `MCP_REFRESH_TOKEN_TTL`   | `28800`                  | Refresh token lifetime, seconds                                                     |
-| `MCP_OAUTH_STATE_FILE`    | `/data/oauth-state.json` | OAuth state persistence; set it [outside a container](#running-outside-a-container) |
-| `MCP_REQUEST_STATE_KEY`   | generated at startup     | HMAC key for confirmation state (>=32 bytes)                                        |
-| `MCP_ALLOW_INSECURE_HTTP` | unset                    | Local development only: allow a non-https public URL                                |
-| `CF_ACCESS_CLIENT_ID`     | unset                    | Cloudflare Access service token id (pair required)                                  |
-| `CF_ACCESS_CLIENT_SECRET` | unset                    | Cloudflare Access service token secret (pair req.)                                  |
-| `COOLIFY_INSTANCES`       | unset                    | JSON array of extra instances ([fleet mode](fleet.md))                              |
-| `COOLIFY_MCP_AUDIT`       | `on` in HTTP mode        | `off` disables the [audit log](#audit-log)                                          |
+| Variable                              | Default                  | Purpose                                                                             |
+| ------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------- |
+| `MCP_TRANSPORT`                       | stdio                    | `http` selects HTTP mode                                                            |
+| `COOLIFY_BASE_URL`                    | required                 | The Coolify instance to manage                                                      |
+| `COOLIFY_ACCESS_TOKEN`                | required                 | The token the container acts with                                                   |
+| `MCP_PUBLIC_URL`                      | required                 | Public https URL of this container                                                  |
+| `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` | required in HTTP mode    | Comma-separated lowercase SHA-256 hashes of tokens allowed to authorize             |
+| `MCP_PORT` (or `PORT`)                | `8080`                   | Listen port                                                                         |
+| `MCP_HOST`                            | all interfaces           | Listen address; `127.0.0.1` keeps it on loopback                                    |
+| `MCP_READONLY`                        | `false`                  | Register only read-only tools                                                       |
+| `MCP_ACCESS_TOKEN_TTL`                | `3600`                   | Access token lifetime, seconds                                                      |
+| `MCP_REFRESH_TOKEN_TTL`               | `28800`                  | Refresh token lifetime, seconds                                                     |
+| `MCP_OAUTH_STATE_FILE`                | `/data/oauth-state.json` | OAuth state persistence; set it [outside a container](#running-outside-a-container) |
+| `MCP_REQUEST_STATE_KEY`               | generated at startup     | HMAC key for confirmation state (>=32 bytes)                                        |
+| `MCP_ALLOW_INSECURE_HTTP`             | unset                    | Local development only: allow a non-https public URL                                |
+| `CF_ACCESS_CLIENT_ID`                 | unset                    | Cloudflare Access service token id (pair required)                                  |
+| `CF_ACCESS_CLIENT_SECRET`             | unset                    | Cloudflare Access service token secret (pair req.)                                  |
+| `COOLIFY_INSTANCES`                   | unset                    | JSON array of extra instances ([fleet mode](fleet.md))                              |
+| `COOLIFY_MCP_AUDIT`                   | `on` in HTTP mode        | `off` disables the [audit log](#audit-log)                                          |
 
 ### Running outside a container
 
@@ -280,7 +294,8 @@ Nothing ran and no credential was used, but the call is absent from the record.
 **Container restart-loops, log shows nothing useful.** You are deploying a
 pre-3.0 ref with no HTTP mode: the container starts the stdio server, waits
 on stdin forever, fails the health check, and Coolify restarts it. Set the
-branch to `main` (3.0.0 or later) and redeploy.
+repository and branch to the reviewed source from the install steps above and
+redeploy.
 
 **`https://` 503s, `http://` 404s.** The domain was saved with the `http://`
 scheme, so the proxy created no TLS router. Change the Domains field to
@@ -320,6 +335,7 @@ missing, so OAuth state dies with the container. Add it under Storages.
   reach remotely than locally, and destructive operations are harder.
 - Refuses to boot with a plain-http public URL unless
   `MCP_ALLOW_INSECURE_HTTP=true` is set explicitly.
+- Refuses to boot in HTTP mode unless the authorization token-hash allowlist is configured.
 - The test suite logs in through the full OAuth flow with the official MCP
   client SDK and runs an MCP session against this server. A change that
   breaks a real client fails CI before it ships.

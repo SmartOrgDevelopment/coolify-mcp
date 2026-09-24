@@ -98,6 +98,17 @@ describe('runDoctor', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('reports a missing HTTP OAuth token allowlist in its config check', async () => {
+    const env = cleanEnv();
+    env.MCP_TRANSPORT = 'http';
+    delete env.MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES;
+    const fetchMock = healthyFetch();
+    const report = await runDoctor(env, fetchMock as unknown as FetchLike);
+    expect(report.ok).toBe(false);
+    expect(check(report, 'config').detail).toContain('MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES');
+    expect(check(report, 'reachability').status).toBe('pass');
+  });
+
   // #368 story 4 (hospital-reunioes): 401s with a syntactically fine token.
   it('reports a rejected token with a fix', async () => {
     const fetchMock = jest.fn(async (url: unknown, init?: unknown) => {

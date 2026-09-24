@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **HTTP OAuth authorization now requires an explicit Coolify token-hash allowlist.** Set `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` to comma-separated lowercase SHA-256 digests of the Coolify API tokens permitted to authorize MCP clients. A presented token is compared by digest before the server contacts Coolify, then used only for the existing one-time proof request and discarded. This fork intentionally fails closed when the variable is missing or malformed.
+
 ## [3.5.1] - 2026-09-16
 
 ### Added

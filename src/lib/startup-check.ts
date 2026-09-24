@@ -51,6 +51,24 @@ const CHECKED_VARS = {
 
 export type Transport = keyof typeof CHECKED_VARS;
 
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+/** Parse the HTTP-only authorization allowlist without retaining raw tokens. */
+export function authorizedCoolifyTokenHashesFromEnv(raw: string | undefined): Buffer[] {
+  const hashes = raw?.split(',').map((value) => value.trim()) ?? [];
+  if (hashes.length === 0 || hashes.some((hash) => hash === '')) {
+    throw new Error(
+      'MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES is required in HTTP mode. Set it to one or more comma-separated SHA-256 token hashes.',
+    );
+  }
+  if (hashes.some((hash) => !SHA256_HEX.test(hash))) {
+    throw new Error(
+      'MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES must contain only lowercase 64-character SHA-256 hex hashes.',
+    );
+  }
+  return hashes.map((hash) => Buffer.from(hash, 'hex'));
+}
+
 /**
  * An unexpanded shell/launcher placeholder: the whole value is `${VAR}`,
  * `$VAR`, or contains a `${` that no launcher expanded. Real Coolify tokens
@@ -75,6 +93,14 @@ export function checkStartupConfig(
 ): StartupCheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  if (transport === 'http') {
+    try {
+      authorizedCoolifyTokenHashesFromEnv(env.MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   for (const name of CHECKED_VARS[transport]) {
     const value = env[name];
