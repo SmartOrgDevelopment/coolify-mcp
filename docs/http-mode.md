@@ -116,10 +116,13 @@ Paste this at your assistant:
 
 ```text
 Deploy the coolify-mcp HTTP container on my Coolify:
-create an application from the public repo https://github.com/StuMason/coolify-mcp,
-branch main, dockerfile build pack, port 8080, domain https://mcp.MYDOMAIN.
+create an application from the public repo https://github.com/SmartOrgDevelopment/coolify-mcp,
+branch fix/http-oauth-token-allowlist, dockerfile build pack, port 8080, domain https://mcp.MYDOMAIN.
 Env vars: MCP_TRANSPORT=http, MCP_PUBLIC_URL=mcp.MYDOMAIN,
-COOLIFY_BASE_URL and COOLIFY_ACCESS_TOKEN as I give them to you.
+COOLIFY_BASE_URL and COOLIFY_ACCESS_TOKEN as I give them to you, and
+MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES as the comma-separated SHA-256 hashes of
+the Coolify API tokens that may authorize. Do not store any authorization token
+itself in container configuration.
 Add a persistent volume at /data, enable a health check on /healthz port
 8080, deploy it, then curl /healthz and the oauth-authorization-server
 metadata to prove it's up.
@@ -291,7 +294,8 @@ Nothing ran and no credential was used, but the call is absent from the record.
 **Container restart-loops, log shows nothing useful.** You are deploying a
 pre-3.0 ref with no HTTP mode: the container starts the stdio server, waits
 on stdin forever, fails the health check, and Coolify restarts it. Set the
-branch to `main` (3.0.0 or later) and redeploy.
+repository and branch to the reviewed source from the install steps above and
+redeploy.
 
 **`https://` 503s, `http://` 404s.** The domain was saved with the `http://`
 scheme, so the proxy created no TLS router. Change the Domains field to
