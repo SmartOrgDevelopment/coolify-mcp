@@ -13,11 +13,30 @@ import {
 const cleanEnv = (): NodeJS.ProcessEnv => ({
   COOLIFY_BASE_URL: 'https://coolify.example.com',
   COOLIFY_ACCESS_TOKEN: '7|abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef',
+  MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES: 'a'.repeat(64),
 });
 
 describe('checkStartupConfig', () => {
   it('passes a clean config with no errors or warnings', () => {
     expect(checkStartupConfig(cleanEnv(), 'http')).toEqual({ errors: [], warnings: [] });
+  });
+
+  it('requires lowercase SHA-256 authorization hashes in HTTP mode only', () => {
+    const env = cleanEnv();
+    delete env.MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES;
+    expect(
+      checkStartupConfig(env, 'http').errors.some((error) =>
+        error.includes('MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES is required'),
+      ),
+    ).toBe(true);
+    expect(checkStartupConfig(env, 'stdio').errors).toEqual([]);
+
+    env.MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES = 'A'.repeat(64);
+    expect(
+      checkStartupConfig(env, 'http').errors.some((error) =>
+        error.includes('lowercase 64-character SHA-256'),
+      ),
+    ).toBe(true);
   });
 
   // The failure story behind the check: a macOS Keychain entry stored the
@@ -145,9 +164,9 @@ describe('checkStartupConfig', () => {
     expect(warnings.some((w) => w.includes('/api/v1 itself'))).toBe(true);
   });
 
-  it('leaves unset and empty variables alone (the entry points own required-var errors)', () => {
-    expect(checkStartupConfig({}, 'http')).toEqual({ errors: [], warnings: [] });
-    expect(checkStartupConfig({ COOLIFY_ACCESS_TOKEN: '' }, 'http')).toEqual({
+  it('leaves unset and empty HTTP-only variables alone in stdio mode', () => {
+    expect(checkStartupConfig({}, 'stdio')).toEqual({ errors: [], warnings: [] });
+    expect(checkStartupConfig({ COOLIFY_ACCESS_TOKEN: '' }, 'stdio')).toEqual({
       errors: [],
       warnings: [],
     });

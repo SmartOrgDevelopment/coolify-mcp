@@ -18,6 +18,8 @@ import {
 import {
   createHttpApp,
   describeListen,
+  authorizedCoolifyTokenHashesFromEnv,
+  isAuthorizedCoolifyToken,
   listenOptionsFromEnv,
   normalizePublicUrl,
   validateCoolifyToken,
@@ -29,6 +31,11 @@ import { confirmDestructive } from '../lib/elicit.js';
 
 const ISSUER = 'https://mcp.example.com';
 const RESOURCE = `${ISSUER}/mcp`;
+const TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES = authorizedCoolifyTokenHashesFromEnv(
+  ['valid-team-token', 'valid']
+    .map((token) => createHash('sha256').update(token).digest('hex'))
+    .join(','),
+);
 
 function makeProvider(stateFile = ''): OAuthProvider {
   return new OAuthProvider({
@@ -464,6 +471,20 @@ describe('validateCoolifyToken (tier-2 proof of access)', () => {
   });
 });
 
+describe('HTTP OAuth token allowlist', () => {
+  it('requires lowercase SHA-256 hashes and compares presented tokens by digest', () => {
+    const allowed = authorizedCoolifyTokenHashesFromEnv(
+      createHash('sha256').update('approved-token').digest('hex'),
+    );
+    expect(isAuthorizedCoolifyToken('approved-token', allowed)).toBe(true);
+    expect(isAuthorizedCoolifyToken('other-token', allowed)).toBe(false);
+    expect(() => authorizedCoolifyTokenHashesFromEnv(undefined)).toThrow(
+      'MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES is required',
+    );
+    expect(() => authorizedCoolifyTokenHashesFromEnv('A'.repeat(64))).toThrow('lowercase');
+  });
+});
+
 describe('RateLimiter', () => {
   it('blocks after the limit inside one window', () => {
     const limiter = new RateLimiter(3, 60_000);
@@ -489,6 +510,7 @@ describe('HTTP app routes', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
       ...overrides,
     });
   }
@@ -601,7 +623,7 @@ describe('HTTP app routes', () => {
   });
 
   it('re-renders with an error when the presented Coolify token is refused', async () => {
-    global.fetch = jest.fn(async () => new Response('{}', { status: 401 })) as typeof fetch;
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as typeof fetch;
     const app = makeApp();
     const clientId = registerTestClient(app.provider);
     const { challenge } = pkcePair();
@@ -618,9 +640,10 @@ describe('HTTP app routes', () => {
     );
     expect(response.status).toBe(401);
     const page = await response.text();
-    expect(page).toContain('not accepted');
+    expect(page).toContain('not authorized');
     // The refused credential must not be echoed back into the page.
     expect(page).not.toContain('not-a-real-token');
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('sends configured customHeaders (CF Access) on the authorize-time token validation', async () => {
@@ -916,6 +939,7 @@ describe('adversarial (#303 hardening)', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
   }
 
@@ -1409,6 +1433,7 @@ describe('Client ID Metadata Documents (#340)', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
     // No fetcher injected here, so the real guard answers: a loopback
     // identifier is rejected on the page, never redirected, never fetched.
@@ -1512,6 +1537,7 @@ describe('Client ID Metadata Documents (#340)', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
     const headers = {
       'x-forwarded-for': '203.0.113.10',
@@ -1539,6 +1565,7 @@ describe('Client ID Metadata Documents (#340)', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
     const stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1712,6 +1739,7 @@ describe('protected-resource metadata: exact resource match (#340)', () => {
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
   }
 
@@ -1826,6 +1854,7 @@ describe('discovery and token stay inside the 10s connection budget (#340)', () 
       refreshTokenTtl: 28_800,
       stateFile: '',
       readonly: false,
+      authorizedCoolifyTokenHashes: TEST_AUTHORIZED_COOLIFY_TOKEN_HASHES,
     });
 
     try {

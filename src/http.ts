@@ -19,6 +19,7 @@ import {
   checkStartupConfig,
   DEFAULT_OAUTH_STATE_FILE,
   ensureStateFileWritable,
+  authorizedCoolifyTokenHashesFromEnv,
 } from './lib/startup-check.js';
 import { registryFromEnv, type InstanceRegistry } from './lib/instances.js';
 import type { CoolifyConfig } from './types/coolify.js';
@@ -91,7 +92,6 @@ function main(): void {
       'COOLIFY_ACCESS_TOKEN is not set. Create one in Coolify under Keys & Tokens → API tokens',
     );
   }
-
   let publicUrl = '';
   if (!rawPublicUrl) {
     problems.push(
@@ -138,6 +138,11 @@ function main(): void {
     process.exit(1);
   }
 
+  // The startup check above has validated this required HTTP-only setting.
+  const authorizedCoolifyTokenHashes = authorizedCoolifyTokenHashesFromEnv(
+    process.env.MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES,
+  );
+
   // The instance registry (#367). The default instance carries the CF Access
   // service token (#373) on every Coolify API request, including the tier-2
   // proof-of-access fetch — never on any other fetch this server makes.
@@ -165,6 +170,7 @@ function main(): void {
     refreshTokenTtl: Number(process.env.MCP_REFRESH_TOKEN_TTL || 28_800),
     stateFile,
     readonly,
+    authorizedCoolifyTokenHashes,
   });
 
   const server = createServer((req, res) => {
