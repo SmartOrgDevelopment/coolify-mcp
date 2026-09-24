@@ -26,6 +26,8 @@ export interface InstructionsOptions {
   defaultInstance: string;
   /** Only read-only tools are registered (MCP_READONLY in HTTP mode). */
   readonly: boolean;
+  /** Whether callers may request plaintext credentials with `reveal: true`. */
+  allowSensitiveReads: boolean;
   /**
    * Destructive operations refuse unless the client supports elicitation
    * (HTTP mode). Off, the stdio default: without elicitation they run
@@ -42,7 +44,9 @@ export function buildInstructions(options: InstructionsOptions): string {
 
     '`get_infrastructure_overview` summarises the whole estate in one call, `find_issues` scans it for anything unhealthy, and `diagnose_app` or `diagnose_server` explains one resource. `search_docs` searches the Coolify documentation.',
 
-    "Secrets are masked in every response. `get_application`, `get_database` and `get_service` accept `reveal: true` to return one resource's credentials in plaintext; `env_vars` with `reveal: true` requires a `key` and returns that one variable.",
+    options.allowSensitiveReads
+      ? "Secrets are masked in every response. `get_application`, `get_database` and `get_service` accept `reveal: true` to return one resource's credentials in plaintext; `env_vars` with `reveal: true` requires a `key` and returns that one variable."
+      : 'Secrets are masked in every response. This HTTP server never returns plaintext credentials: the Coolify token supplied during authorization proves access but is not used for tool calls.',
 
     options.readonly
       ? 'This server runs in read-only mode: only tools annotated read-only are registered, and nothing here can change the instance.'

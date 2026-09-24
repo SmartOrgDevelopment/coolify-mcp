@@ -77,7 +77,8 @@ describe('HTTP mode interop with the reference MCP client', () => {
   let resourceUrl = '';
 
   beforeAll(async () => {
-    // A pretend Coolify: accepts exactly one token on /teams/current.
+    // A pretend Coolify: accepts exactly one token with the bridge's required
+    // read, write, and deploy abilities.
     coolifyMock = createServer((req, res) => {
       if (
         req.url === '/api/v1/teams/current' &&
@@ -85,6 +86,21 @@ describe('HTTP mode interop with the reference MCP client', () => {
       ) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ id: 0, name: 'Root Team' }));
+        return;
+      }
+      if (req.url === '/api/v1/projects' && req.method === 'POST') {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: 'Validation failed.',
+            errors: { name: ['The name field is required.'] },
+          }),
+        );
+        return;
+      }
+      if (req.url === '/api/v1/deploy' && req.method === 'GET') {
+        res.writeHead(405, { 'content-type': 'application/json', Allow: 'POST' });
+        res.end(JSON.stringify({ message: 'This endpoint has changed to a POST request.' }));
         return;
       }
       res.writeHead(401, { 'content-type': 'application/json' });

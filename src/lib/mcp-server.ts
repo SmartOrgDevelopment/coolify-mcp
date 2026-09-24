@@ -717,6 +717,12 @@ export interface CoolifyMcpServerOptions {
    */
   readonly?: boolean;
   /**
+   * Expose `reveal: true` inputs that can return plaintext credentials. HTTP
+   * OAuth uses its own configured token for tool calls, so it disables these
+   * rather than treating an authorization-time proof token as secret authority.
+   */
+  allowSensitiveReads?: boolean;
+  /**
    * Destructive operations refuse instead of falling back to parameter-only
    * confirmation when the client cannot be asked via elicitation (#303).
    * HTTP mode sets this; stdio keeps the progressive-enhancement default.
@@ -1034,6 +1040,7 @@ export class CoolifyMcpServer extends McpServer {
           fleet: registry.isFleet,
           defaultInstance: registry.default.name,
           readonly: options?.readonly === true,
+          allowSensitiveReads: options?.allowSensitiveReads !== false,
           requireElicitation: options?.requireElicitation === true,
         }),
         requestState: { verify: (state, ctx) => requestState.verify(state, ctx) },
@@ -1520,6 +1527,12 @@ export class CoolifyMcpServer extends McpServer {
   }
 
   private registerTools(): void {
+    const allowSensitiveReads = this.serverOptions.allowSensitiveReads !== false;
+    const sensitiveReadInput = <Shape extends z.ZodRawShape>(input: Shape): Shape => {
+      if (allowSensitiveReads) return input;
+      return Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'reveal')) as Shape;
+    };
+
     // =========================================================================
     // Meta (2 tools)
     // =========================================================================
@@ -1841,8 +1854,10 @@ export class CoolifyMcpServer extends McpServer {
 
     this.defineTool(
       'get_application',
-      'App details. Credentials (webhook secrets, basic-auth password, compose bodies, labels) are masked by default; pass reveal: true when you explicitly need them.',
-      { uuid: z.string(), reveal: z.boolean().optional() },
+      allowSensitiveReads
+        ? 'App details. Credentials (webhook secrets, basic-auth password, compose bodies, labels) are masked by default; pass reveal: true when you explicitly need them.'
+        : 'App details. Credentials (webhook secrets, basic-auth password, compose bodies, labels) are masked.',
+      sensitiveReadInput({ uuid: z.string(), reveal: z.boolean().optional() }),
       async ({ uuid, reveal }) =>
         this.wrapWithActions(
           () => this.client.getApplication(uuid, { reveal }),
@@ -2309,8 +2324,10 @@ export class CoolifyMcpServer extends McpServer {
 
     this.defineTool(
       'get_database',
-      'Database details. Credentials (passwords, connection URLs) are masked by default; pass reveal: true when you explicitly need them, e.g. to wire an app to the database.',
-      { uuid: z.string(), reveal: z.boolean().optional() },
+      allowSensitiveReads
+        ? 'Database details. Credentials (passwords, connection URLs) are masked by default; pass reveal: true when you explicitly need them, e.g. to wire an app to the database.'
+        : 'Database details. Credentials (passwords, connection URLs) are masked.',
+      sensitiveReadInput({ uuid: z.string(), reveal: z.boolean().optional() }),
       async ({ uuid, reveal }) => wrap(() => this.client.getDatabase(uuid, { reveal })),
     );
 
@@ -2546,8 +2563,10 @@ export class CoolifyMcpServer extends McpServer {
 
     this.defineTool(
       'get_service',
-      'Service details. Credentials (compose bodies with resolved passwords, webhook secrets) are masked by default; pass reveal: true when you explicitly need them.',
-      { uuid: z.string(), reveal: z.boolean().optional() },
+      allowSensitiveReads
+        ? 'Service details. Credentials (compose bodies with resolved passwords, webhook secrets) are masked by default; pass reveal: true when you explicitly need them.'
+        : 'Service details. Credentials (compose bodies with resolved passwords, webhook secrets) are masked.',
+      sensitiveReadInput({ uuid: z.string(), reveal: z.boolean().optional() }),
       async ({ uuid, reveal }) => wrap(() => this.client.getService(uuid, { reveal })),
     );
 
@@ -2877,8 +2896,10 @@ export class CoolifyMcpServer extends McpServer {
     // =========================================================================
     this.defineTool(
       'env_vars',
-      "Manage env vars for app, service, or database. Values are masked by default (returned as '***') to avoid leaking secrets to MCP clients; pass reveal=true on the list action when the caller explicitly needs the plaintext (e.g. 'what is FOO set to?'). On list, pass key to return only that variable — always combine reveal with key so only the requested value (not every secret on the resource) is exposed. Set is_buildtime=false (and/or is_runtime=true) for runtime-only vars to avoid Dockerfile ARG issues with multiline values like PEM keys. Preview vs production: is_preview marks a variable as applying to preview (pull-request) deployments rather than production. These are SEPARATE scopes — the same key can legitimately exist in both with different values, and that is normal configuration, not a mistake to reconcile. Check is_preview on each entry before concluding a variable is set wrong, and pass is_preview on create/update to target the preview scope (omit it to target production).",
-      {
+      allowSensitiveReads
+        ? "Manage env vars for app, service, or database. Values are masked by default (returned as '***') to avoid leaking secrets to MCP clients; pass reveal=true on the list action when the caller explicitly needs the plaintext (e.g. 'what is FOO set to?'). On list, pass key to return only that variable — always combine reveal with key so only the requested value (not every secret on the resource) is exposed. Set is_buildtime=false (and/or is_runtime=true) for runtime-only vars to avoid Dockerfile ARG issues with multiline values like PEM keys. Preview vs production: is_preview marks a variable as applying to preview (pull-request) deployments rather than production. These are SEPARATE scopes — the same key can legitimately exist in both with different values, and that is normal configuration, not a mistake to reconcile. Check is_preview on each entry before concluding a variable is set wrong, and pass is_preview on create/update to target the preview scope (omit it to target production)."
+        : 'Manage env vars for app, service, or database. Values are always masked in this HTTP server. Set is_buildtime=false (and/or is_runtime=true) for runtime-only vars to avoid Dockerfile ARG issues with multiline values like PEM keys. Preview vs production: is_preview marks a variable as applying to preview (pull-request) deployments rather than production. These are SEPARATE scopes — the same key can legitimately exist in both with different values, and that is normal configuration, not a mistake to reconcile. Check is_preview on each entry before concluding a variable is set wrong, and pass is_preview on create/update to target the preview scope (omit it to target production).',
+      sensitiveReadInput({
         resource: z.enum(['application', 'service', 'database']),
         action: z.enum(['list', 'create', 'update', 'delete', 'bulk_update']),
         uuid: z.string(),
@@ -2903,7 +2924,7 @@ export class CoolifyMcpServer extends McpServer {
             }),
           )
           .optional(),
-      },
+      }),
       async ({
         resource,
         action,
@@ -4078,12 +4099,14 @@ export class CoolifyMcpServer extends McpServer {
     // =========================================================================
     this.defineTool(
       'system',
-      'System operations: health/list_resources/enable_api/disable_api. `list_resources` defaults to an essential projection (uuid/name/type/status) to keep token budgets sane on instances with many resources; pass `include_full: true` for the raw Coolify payload. When `include_full: true`, credentials are masked unless `reveal: true` is also set (matches the `env_vars` `reveal` ergonomics): webhook HMAC secrets, basic-auth password, database passwords, internal/external_db_url connection strings, compose bodies, custom_labels, and nested env-var values.',
-      {
+      allowSensitiveReads
+        ? 'System operations: health/list_resources/enable_api/disable_api. `list_resources` defaults to an essential projection (uuid/name/type/status) to keep token budgets sane on instances with many resources; pass `include_full: true` for the raw Coolify payload. When `include_full: true`, credentials are masked unless `reveal: true` is also set (matches the `env_vars` `reveal` ergonomics): webhook HMAC secrets, basic-auth password, database passwords, internal/external_db_url connection strings, compose bodies, custom_labels, and nested env-var values.'
+        : 'System operations: health/list_resources/enable_api/disable_api. `list_resources` defaults to an essential projection (uuid/name/type/status) to keep token budgets sane on instances with many resources. Credentials remain masked, including with `include_full: true`.',
+      sensitiveReadInput({
         action: z.enum(['health', 'list_resources', 'enable_api', 'disable_api']),
         include_full: z.boolean().optional(),
         reveal: z.boolean().optional(),
-      },
+      }),
       async ({ action, include_full, reveal }, extra) => {
         switch (action) {
           case 'health':

@@ -204,6 +204,50 @@ async function probeAbility(
   }
 }
 
+/** A validation-only `POST /projects` response proves the write gate ran. */
+function isProjectNameValidation(body: unknown): boolean {
+  const value = body as { message?: unknown; errors?: { name?: unknown } };
+  return (
+    value.message === 'Validation failed.' &&
+    Array.isArray(value.errors?.name) &&
+    value.errors.name.length > 0 &&
+    value.errors.name.every((error) => typeof error === 'string')
+  );
+}
+
+/**
+ * Probe write permission without creating a project. Coolify runs the write
+ * middleware before validation; `{}` then fails the required `name` field.
+ */
+async function probeWriteAbility(
+  fetchImpl: FetchLike,
+  instance: InstanceConfig,
+): Promise<'granted' | 'missing' | 'member-blocked' | 'unknown'> {
+  try {
+    const response = await fetchImpl(`${instance.baseUrl}/api/v1/projects`, {
+      method: 'POST',
+      headers: {
+        ...instance.headers,
+        Authorization: `Bearer ${instance.token}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    const body = await readJson(response);
+    if (response.status === 403) {
+      if (missingAbilities(body) !== undefined) return 'missing';
+      if (isMemberBlocked(body)) return 'member-blocked';
+      return 'unknown';
+    }
+    return response.status === 422 && isProjectNameValidation(body) ? 'granted' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 async function checkInstance(
   env: NodeJS.ProcessEnv,
   instance: InstanceConfig,
@@ -391,49 +435,59 @@ async function checkInstance(
     }
   }
 
-  // --- abilities: read is proven by the token check; probe deploy ---
+  // --- abilities: read is proven by the token check; probe write + deploy ---
   //
-  // Only `deploy` is probeable side-effect-free: `GET /deploy` is routed in
-  // every Coolify era and its controller 400s without a uuid/tag. `write`
-  // has no equivalent — every write-gated endpoint is POST/PATCH/DELETE, and
-  // a GET against those is a *routing miss* that never reaches the ability
-  // middleware (the same mechanism the api-shape check below verifies), so
-  // any GET-based write probe would report "granted" on no evidence.
-  // (`/enable` specifically is root-gated AND method-split across v4.2 —
-  // wrong on both axes.) Saying "undetermined" beats guessing.
-  const WRITE_NOTE = 'write: not probeable without side effects';
+  // `POST /projects` with `{}` reaches the write gate and then deterministically
+  // fails required-name validation, so no project persists. `GET /deploy` is
+  // likewise parameterless and cannot deploy. Both use exact accepted shapes;
+  // a proxy, WAF or future upstream response must remain indeterminate.
   if (!tokenOk) {
     checks.push({ check: 'abilities', status: 'skipped', detail: 'token check did not pass' });
   } else {
+    const write = await probeWriteAbility(fetchImpl, instance);
     const deploy = await probeAbility(fetchImpl, instance, '/deploy');
-    if (deploy === 'member-blocked') {
+    if (write === 'member-blocked' || deploy === 'member-blocked') {
       checks.push({
         check: 'abilities',
         status: 'warn',
-        detail: `token abilities exceed your team role — writes are blocked upstream (granted: read; ${WRITE_NOTE})`,
+        detail:
+          'token abilities exceed your team role — writes are blocked upstream (granted: read)',
         fix: 'Ask a team admin/owner to issue the token, or expect read-only behaviour',
       });
-    } else if (deploy === 'missing') {
+    } else if (write === 'missing' || deploy === 'missing') {
+      const missing = [write === 'missing' && 'write', deploy === 'missing' && 'deploy'].filter(
+        (ability): ability is string => ability !== false,
+      );
+      const granted = [
+        'read',
+        write === 'granted' && 'write',
+        deploy === 'granted' && 'deploy',
+      ].filter((ability): ability is string => ability !== false);
       checks.push({
         check: 'abilities',
         status: 'warn',
-        detail: `token lacks: deploy (granted: read; ${WRITE_NOTE}) — deploy tools will 403`,
-        fix: 'Recreate the token with the deploy ability if you need those tools',
+        detail: `token lacks: ${missing.join(', ')} (granted: ${granted.join(', ')}) — affected tools will 403`,
+        fix: `Recreate the token with ${missing.join(' and ')} permission${missing.length > 1 ? 's' : ''} if you need those tools`,
       });
-    } else if (deploy === 'unknown') {
-      // Visible but non-gating, like the write note: an undeterminable extra
-      // ability must not fail a healthy instance. The gating "inconclusive"
-      // status stays reserved for checks that verify the setup itself.
+    } else if (write === 'unknown' || deploy === 'unknown') {
+      const unknown = [write === 'unknown' && 'write', deploy === 'unknown' && 'deploy'].filter(
+        (ability): ability is string => ability !== false,
+      );
+      const granted = [
+        'read',
+        write === 'granted' && 'write',
+        deploy === 'granted' && 'deploy',
+      ].filter((ability): ability is string => ability !== false);
       checks.push({
         check: 'abilities',
         status: 'warn',
-        detail: `token grants: read (deploy: could not determine; ${WRITE_NOTE})`,
+        detail: `token grants: ${granted.join(', ')} (${unknown.join(', ')}: could not determine)`,
       });
     } else {
       checks.push({
         check: 'abilities',
         status: 'pass',
-        detail: `token grants: read, deploy (${WRITE_NOTE})`,
+        detail: 'token grants: read, write, deploy',
       });
     }
   }

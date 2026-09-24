@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **HTTP OAuth authorization now requires an explicit Coolify token-hash allowlist.** Set `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` to comma-separated lowercase SHA-256 digests of the Coolify API tokens permitted to authorize MCP clients. A presented token is compared by digest before the server contacts Coolify, then used only for the existing one-time proof request and discarded. This fork intentionally fails closed when the variable is missing or malformed.
+- **HTTP OAuth authorization now requires an explicit Coolify token-hash allowlist.** Set `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` to comma-separated lowercase SHA-256 digests of the Coolify API tokens permitted to authorize MCP clients. A presented token is compared by digest before the server contacts Coolify, then used only for the authorization-time permission proof and discarded. This fork intentionally fails closed when the variable is missing or malformed.
+- **HTTP OAuth authorization now requires effective Coolify permission.** After an allowlisted token proves team access, the server uses validation-only capability probes to verify every authority the bridge grants: read for a read-only container; read, write, and deploy for a read-write container. Tokens without the required permissions, or instances that cannot establish them, are refused without issuing an MCP token.
+- **HTTP OAuth no longer exposes sensitive-read inputs.** `reveal: true` is omitted from HTTP tool schemas because the Coolify token entered during authorization is only a proof and is not the configured credential that executes tools. Stdio mode retains its explicit sensitive-read opt-in.
 
 ## [3.5.1] - 2026-09-16
 

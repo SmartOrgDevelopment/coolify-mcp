@@ -98,6 +98,11 @@ authorize page cannot be used to probe other hosts.
 Secrets are masked at the API boundary. A client granted "list" access never
 sees plaintext credentials unless you explicitly opt in with `reveal: true`:
 
+In HTTP mode, `reveal` inputs are not registered. The Coolify token entered on
+the authorization page proves the client may receive an MCP token but is not
+the configured credential used for tool calls, so treating it as authority to
+read secrets would elevate a lower-privilege token.
+
 - **`env_vars`**: variable values return as `***`. `reveal: true` is accepted
   only with an exact `key`; the tool then returns only that matching row.
   Bulk plaintext reads of every variable are rejected. Coolify exposes env

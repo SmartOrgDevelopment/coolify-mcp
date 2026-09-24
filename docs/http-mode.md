@@ -42,7 +42,8 @@ mode. There are no command overrides and no compose file to write.
 
    HTTP mode fails closed unless this allowlist is configured. Hash each
    authorized person's Coolify API token without putting the token itself in
-   container configuration:
+   container configuration. Authorization validates the presented token for the
+   privileges this container exposes before issuing an MCP token.
 
    ```bash
    printf %s "$COOLIFY_TOKEN" | shasum -a 256 | cut -d ' ' -f 1
@@ -165,9 +166,13 @@ last good copy, and after that clients re-authorize.
   Coolify API token as proof that you have access to this Coolify instance.
   The token's SHA-256 digest must first be in
   `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES`; only then does the container validate
-  it against `GET /teams/current` and discard it. The token is never stored
-  and never used to act. The page tells you to check the address bar before
-  pasting: only your own server should ever ask for a Coolify token.
+  it for the privileges exposed by this container, then discards it. A
+  read-write container requires effective read, write, and deploy permission;
+  a read-only container requires read permission only. The validation uses only
+  non-mutating capability probes, including a deliberately invalid project
+  request that Coolify rejects before creating anything. The token is never
+  stored and never used to act. The page tells you to check the address bar
+  before pasting: only your own server should ever ask for a Coolify token.
 - The client ends up holding a short-lived, revocable MCP token bound to this
   server. Access tokens last 1 hour and refresh silently. Refresh tokens last
   8 hours, so someone removed from Coolify loses MCP access within hours.
@@ -331,8 +336,10 @@ missing, so OAuth state dies with the container. Add it under Storages.
   request-body cap. Receive timeouts.
 - Every tool call is logged to stdout as one JSON line (client id, tool,
   time), readable in Coolify's log view.
-- Secrets masking is identical to stdio mode. `reveal: true` is no easier to
-  reach remotely than locally, and destructive operations are harder.
+- Secrets are always masked in HTTP mode. The Coolify token supplied during
+  OAuth authorization proves access but is never used for tool calls, so HTTP
+  tool schemas do not expose `reveal: true`. Use stdio mode for a deliberate
+  local sensitive read with the configured Coolify credential.
 - Refuses to boot with a plain-http public URL unless
   `MCP_ALLOW_INSECURE_HTTP=true` is set explicitly.
 - Refuses to boot in HTTP mode unless the authorization token-hash allowlist is configured.
