@@ -30,8 +30,8 @@ the server will actually do.
 
 Every probe is side-effect free. `read` is proven by the token check; `deploy`
 is probed through the ability-gated `GET /deploy` with no parameters, so no
-controller can act. `write` is probed with `POST /projects` and `{}`: after the
-write middleware, Coolify rejects the missing required `name` with its exact
+controller can act. `write` is probed with `POST /projects` and `{"name":""}`: after the
+write middleware, Coolify rejects the empty required `name` with its exact
 validation response, so no project is created. Any other response is reported
 as undetermined rather than treated as permission.
 

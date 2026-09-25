@@ -474,7 +474,7 @@ describe('runDoctor', () => {
       const method = (call[1] as RequestInit | undefined)?.method ?? 'GET';
       if (method === 'POST') {
         expect(call[0]).toBe(`${BASE}/api/v1/projects`);
-        expect((call[1] as RequestInit).body).toBe('{}');
+        expect((call[1] as RequestInit).body).toBe('{"name":""}');
       } else {
         expect(method).toBe('GET');
       }

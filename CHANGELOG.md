@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **HTTP OAuth and doctor write-permission probes now work with Coolify 4.3.** The validation-only project request sends an explicit empty `name`; Coolify 4.3 treats an entirely empty object as malformed before the write controller's required-field validation.
+
 ### Changed
 
 - **HTTP OAuth authorization now requires an explicit Coolify token-hash allowlist.** Set `MCP_AUTHORIZED_COOLIFY_TOKEN_HASHES` to comma-separated lowercase SHA-256 digests of the Coolify API tokens permitted to authorize MCP clients. A presented token is compared by digest before the server contacts Coolify, then used only for the authorization-time permission proof and discarded. This fork intentionally fails closed when the variable is missing or malformed.

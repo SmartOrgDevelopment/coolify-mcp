@@ -458,7 +458,7 @@ describe('validateCoolifyToken (tier-2 permission proof)', () => {
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
       'https://coolify.example.com/api/v1/projects',
-      expect.objectContaining({ method: 'POST', body: '{}' }),
+      expect.objectContaining({ method: 'POST', body: '{"name":""}' }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,

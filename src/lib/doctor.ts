@@ -217,7 +217,7 @@ function isProjectNameValidation(body: unknown): boolean {
 
 /**
  * Probe write permission without creating a project. Coolify runs the write
- * middleware before validation; `{}` then fails the required `name` field.
+ * middleware before validation; an empty `name` then fails required-field validation.
  */
 async function probeWriteAbility(
   fetchImpl: FetchLike,
@@ -232,7 +232,7 @@ async function probeWriteAbility(
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: '{}',
+      body: '{"name":""}',
       redirect: 'manual',
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
@@ -437,8 +437,8 @@ async function checkInstance(
 
   // --- abilities: read is proven by the token check; probe write + deploy ---
   //
-  // `POST /projects` with `{}` reaches the write gate and then deterministically
-  // fails required-name validation, so no project persists. `GET /deploy` is
+  // `POST /projects` with an empty `name` reaches the write gate and then
+  // deterministically fails required-name validation, so no project persists. `GET /deploy` is
   // likewise parameterless and cannot deploy. Both use exact accepted shapes;
   // a proxy, WAF or future upstream response must remain indeterminate.
   if (!tokenOk) {

@@ -114,9 +114,9 @@ export function describeListen({ port, host }: ListenOptions): string {
 /**
  * Tier-2 proof of access: does this Coolify API token belong to someone with
  * the abilities this container grants? The team GET proves read access. A
- * read-write server also requires an empty POST to `/projects`, which reaches
- * its required-name validation (422) only after the write middleware without
- * creating a project, plus the `GET /deploy` post-required response to prove
+ * read-write server also requires an explicitly invalid POST to `/projects`,
+ * which reaches its required-name validation (422) only after the write
+ * middleware without creating a project, plus the `GET /deploy` post-required response to prove
  * deploy ability. The token is used only for these probes and then discarded —
  * never stored, never used to act.
  */
@@ -150,12 +150,12 @@ export async function validateCoolifyToken(
     }
 
     // Coolify checks `api.ability:write` before its project creation
-    // controller. The required `name` field then makes `{}` fail validation,
-    // so no project is persisted. This route exists throughout 4.0–4.3.
+    // controller. An empty name reaches required-field validation, while an
+    // entirely empty object is rejected as malformed by Coolify 4.3.
     const writeProbe = await fetch(`${apiUrl}/projects`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: '{}',
+      body: '{"name":""}',
       signal: AbortSignal.timeout(10_000),
     });
     if (writeProbe.status !== 422) return { ok: false };

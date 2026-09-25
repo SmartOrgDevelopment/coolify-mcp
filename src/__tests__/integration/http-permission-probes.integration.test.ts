@@ -1,5 +1,5 @@
 /**
- * Live validation for HTTP OAuth's permission proof. The empty project body is
+ * Live validation for HTTP OAuth's permission proof. An empty project name is
  * rejected before project creation, so this probe cannot mutate the instance.
  *
  * Run with: npm run test:integration
