@@ -113,15 +113,18 @@ export function describeListen({ port, host }: ListenOptions): string {
 
 /**
  * Tier-2 proof of access: does this Coolify API token belong to someone with
- * access to the instance this container manages? `GET /teams/current` 401s on
- * a bad token and returns the token's team on a good one. The token is used
- * for exactly this one request and then discarded — never stored, never used
- * to act.
+ * the abilities this container grants? The team GET proves read access. A
+ * read-write server also requires an explicitly invalid POST to `/projects`,
+ * which reaches its required-name validation (422) only after the write
+ * middleware without creating a project, plus the `GET /deploy` post-required response to prove
+ * deploy ability. The token is used only for these probes and then discarded —
+ * never stored, never used to act.
  */
 export async function validateCoolifyToken(
   baseUrl: string,
   presentedToken: string,
   extraHeaders: Record<string, string> = {},
+  requireManagementAbilities = true,
 ): Promise<{ ok: true; teamName: string } | { ok: false }> {
   try {
     // extraHeaders carries the Cloudflare Access service token (#373) when
@@ -130,16 +133,64 @@ export async function validateCoolifyToken(
     // first so it can never displace the Authorization being proven.
     // `/teams/current`, not the spec's `/team`: the old path is still routed
     // upstream and is the only one on 4.0–4.2 (#347, CLAUDE.md gotcha).
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/v1/teams/current`, {
-      headers: {
-        ...extraHeaders,
-        Authorization: `Bearer ${presentedToken}`,
-        Accept: 'application/json',
-      },
+    const apiUrl = `${baseUrl.replace(/\/$/, '')}/api/v1`;
+    const headers = {
+      ...extraHeaders,
+      Authorization: `Bearer ${presentedToken}`,
+      Accept: 'application/json',
+    };
+    const response = await fetch(`${apiUrl}/teams/current`, {
+      headers,
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return { ok: false };
     const team = (await response.json()) as { name?: string };
+    if (!requireManagementAbilities) {
+      return { ok: true, teamName: typeof team.name === 'string' ? team.name : 'your team' };
+    }
+
+    // Coolify checks `api.ability:write` before its project creation
+    // controller. An empty name reaches required-field validation, while an
+    // entirely empty object is rejected as malformed by Coolify 4.3.
+    const writeProbe = await fetch(`${apiUrl}/projects`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: '{"name":""}',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (writeProbe.status !== 422) return { ok: false };
+    const writeBody = (await writeProbe.json()) as {
+      message?: unknown;
+      errors?: { name?: unknown };
+    };
+    if (
+      writeBody.message !== 'Validation failed.' ||
+      !Array.isArray(writeBody.errors?.name) ||
+      writeBody.errors.name.length === 0 ||
+      !writeBody.errors.name.every((error) => typeof error === 'string')
+    ) {
+      return { ok: false };
+    }
+
+    // This request never supplies a deploy target. On 4.0–4.1 it reaches the
+    // deploy controller and returns its required-target error; from 4.2 it
+    // returns the post-required error. Either exact response proves the deploy
+    // middleware was passed, while a proxy/WAF response must not count.
+    const deployProbe = await fetch(`${apiUrl}/deploy`, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    const deployBody = (await deployProbe.json()) as { message?: string };
+    const hasLegacyDeployProof =
+      deployProbe.status === 400 && deployBody.message === 'You must provide uuid or tag.';
+    const hasPostRequiredDeployProof =
+      deployProbe.status === 405 &&
+      deployProbe.headers.get('Allow') === 'POST' &&
+      deployBody.message === 'This endpoint has changed to a POST request.';
+    if (!hasLegacyDeployProof && !hasPostRequiredDeployProof) {
+      return { ok: false };
+    }
+
     return { ok: true, teamName: typeof team.name === 'string' ? team.name : 'your team' };
   } catch {
     // Coolify unreachable is a "no": proof of access cannot be established.
@@ -278,6 +329,7 @@ export function createHttpApp(config: HttpServerConfig): {
     () =>
       new CoolifyMcpServer(config.instances ?? config.coolify, {
         readonly: config.readonly,
+        allowSensitiveReads: false,
         requireElicitation: true,
         // On by default here: a multi-client, internet-facing server is exactly
         // where "who did what" has to be answerable. COOLIFY_MCP_AUDIT=off opts out.
@@ -396,9 +448,10 @@ export function createHttpApp(config: HttpServerConfig): {
         config.coolify.baseUrl,
         presented,
         config.coolify.customHeaders,
+        !config.readonly,
       );
       // `presented` is not referenced past this line: it was compared as a
-      // digest, used once as proof, then discarded without persistence.
+      // digest, used for the permission proof, then discarded without persistence.
       if (!proof.ok) {
         return html(
           authorizePage(

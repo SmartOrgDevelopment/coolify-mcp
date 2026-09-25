@@ -61,6 +61,28 @@ function registerTestClient(provider: OAuthProvider): string {
   return registered.client_id as string;
 }
 
+function successfulCoolifyPermissionProof(): typeof fetch {
+  const responses = [
+    new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+    new Response(
+      JSON.stringify({
+        message: 'Validation failed.',
+        errors: { name: ['The name field is required.'] },
+      }),
+      { status: 422 },
+    ),
+    new Response(JSON.stringify({ message: 'This endpoint has changed to a POST request.' }), {
+      status: 405,
+      headers: { Allow: 'POST' },
+    }),
+  ];
+  return jest.fn(async () => {
+    const response = responses.shift();
+    if (!response) throw new Error('unexpected Coolify permission probe');
+    return response;
+  }) as typeof fetch;
+}
+
 /** Drive the full happy path up to a code, returning what /token needs. */
 function authorize(
   provider: OAuthProvider,
@@ -417,16 +439,14 @@ describe('OAuthProvider', () => {
   });
 });
 
-describe('validateCoolifyToken (tier-2 proof of access)', () => {
+describe('validateCoolifyToken (tier-2 permission proof)', () => {
   const realFetch = global.fetch;
   afterEach(() => {
     global.fetch = realFetch;
   });
 
-  it('accepts a token /teams/current accepts', async () => {
-    global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
-    ) as typeof fetch;
+  it('accepts a token with read, write, and deploy permission', async () => {
+    global.fetch = successfulCoolifyPermissionProof();
     const result = await validateCoolifyToken('https://coolify.example.com', 'good-token');
     expect(result).toEqual({ ok: true, teamName: 'Root Team' });
     expect(global.fetch).toHaveBeenCalledWith(
@@ -435,12 +455,22 @@ describe('validateCoolifyToken (tier-2 proof of access)', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer good-token' }),
       }),
     );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://coolify.example.com/api/v1/projects',
+      expect.objectContaining({ method: 'POST', body: '{"name":""}' }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
+      'https://coolify.example.com/api/v1/deploy',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer good-token' }),
+      }),
+    );
   });
 
   it('carries extra headers (CF Access service token) without displacing the proven token', async () => {
-    global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
-    ) as typeof fetch;
+    global.fetch = successfulCoolifyPermissionProof();
     await validateCoolifyToken('https://coolify.example.com', 'good-token', {
       'CF-Access-Client-Id': 'id.access',
       'CF-Access-Client-Secret': 'cf-secret',
@@ -468,6 +498,95 @@ describe('validateCoolifyToken (tier-2 proof of access)', () => {
       throw new Error('unreachable');
     }) as typeof fetch;
     expect(await validateCoolifyToken('https://coolify.example.com', 'any')).toEqual({ ok: false });
+  });
+
+  it('refuses a token without effective write or deploy permission', async () => {
+    const noWriteResponses = [
+      new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+      new Response(JSON.stringify({ message: 'Forbidden.' }), { status: 403 }),
+    ];
+    global.fetch = jest.fn(
+      async () => noWriteResponses.shift() ?? new Response(null, { status: 500 }),
+    ) as typeof fetch;
+    expect(await validateCoolifyToken('https://coolify.example.com', 'read-only')).toEqual({
+      ok: false,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+
+    const noDeployResponses = [
+      new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+      new Response(
+        JSON.stringify({ message: 'Validation failed.', errors: { name: ['Required.'] } }),
+        { status: 422 },
+      ),
+      new Response(JSON.stringify({ message: 'Forbidden.' }), { status: 403 }),
+    ];
+    global.fetch = jest.fn(
+      async () => noDeployResponses.shift() ?? new Response(null, { status: 500 }),
+    ) as typeof fetch;
+    expect(await validateCoolifyToken('https://coolify.example.com', 'no-deploy')).toEqual({
+      ok: false,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses a generic 405 response instead of treating it as deploy permission', async () => {
+    const responses = [
+      new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+      new Response(
+        JSON.stringify({ message: 'Validation failed.', errors: { name: ['Required.'] } }),
+        { status: 422 },
+      ),
+      new Response(null, { status: 405 }),
+    ];
+    global.fetch = jest.fn(
+      async () => responses.shift() ?? new Response(null, { status: 500 }),
+    ) as typeof fetch;
+    expect(await validateCoolifyToken('https://coolify.example.com', 'proxy-response')).toEqual({
+      ok: false,
+    });
+  });
+
+  it('accepts the legacy deploy controller validation response', async () => {
+    const responses = [
+      new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+      new Response(
+        JSON.stringify({ message: 'Validation failed.', errors: { name: ['Required.'] } }),
+        { status: 422 },
+      ),
+      new Response(JSON.stringify({ message: 'You must provide uuid or tag.' }), { status: 400 }),
+    ];
+    global.fetch = jest.fn(
+      async () => responses.shift() ?? new Response(null, { status: 500 }),
+    ) as typeof fetch;
+    expect(await validateCoolifyToken('https://coolify.example.com', 'legacy-token')).toEqual({
+      ok: true,
+      teamName: 'Root Team',
+    });
+  });
+
+  it('refuses an arbitrary 422 response instead of treating it as write permission', async () => {
+    const responses = [
+      new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+      new Response(JSON.stringify({ message: 'Request blocked.' }), { status: 422 }),
+    ];
+    global.fetch = jest.fn(
+      async () => responses.shift() ?? new Response(null, { status: 500 }),
+    ) as typeof fetch;
+    expect(await validateCoolifyToken('https://coolify.example.com', 'proxy-response')).toEqual({
+      ok: false,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('requires only read permission for a read-only bridge', async () => {
+    global.fetch = jest.fn(
+      async () => new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
+    ) as typeof fetch;
+    expect(
+      await validateCoolifyToken('https://coolify.example.com', 'read-only', {}, false),
+    ).toEqual({ ok: true, teamName: 'Root Team' });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -650,10 +769,8 @@ describe('HTTP app routes', () => {
     // The wiring the 2026-09-08 incident was about: createHttpApp must hand
     // config.coolify.customHeaders to validateCoolifyToken, or authorize
     // dies behind Cloudflare Access while /healthz stays green.
-    const fetchMock = jest.fn(
-      async () => new Response(JSON.stringify({ name: 'Root Team' }), { status: 200 }),
-    );
-    global.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = successfulCoolifyPermissionProof();
+    global.fetch = fetchMock;
     const app = makeApp({
       coolify: {
         baseUrl: 'https://coolify.example.com',
@@ -689,9 +806,7 @@ describe('HTTP app routes', () => {
   });
 
   it('completes authorize → token over HTTP when proof of access succeeds', async () => {
-    global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ name: 'Root Team' }), { status: 200 }),
-    ) as typeof fetch;
+    global.fetch = successfulCoolifyPermissionProof();
     const app = makeApp();
     const clientId = registerTestClient(app.provider);
     const { verifier, challenge } = pkcePair();
@@ -776,7 +891,7 @@ describe('HTTP app routes', () => {
 
   it('serves the MCP protocol end-to-end behind the bearer gate', async () => {
     global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ name: 'Root Team' }), { status: 200 }),
+      async () => new Response(JSON.stringify({ id: 0, name: 'Root Team' }), { status: 200 }),
     ) as typeof fetch;
     const app = makeApp({ readonly: true });
     const clientId = registerTestClient(app.provider);
@@ -842,9 +957,12 @@ describe('HTTP app routes', () => {
     expect(listResponse.status).toBe(200);
     const listText = await listResponse.text();
     // Read-only surface over HTTP: observability tools present, the emergency
-    // stop absent.
+    // stop absent. OAuth's presented Coolify token only proves authorization;
+    // it is not the configured credential that executes tools, so the HTTP
+    // surface must not offer plaintext credential reads.
     expect(listText).toContain('get_infrastructure_overview');
     expect(listText).not.toContain('stop_all_apps');
+    expect(listText).not.toContain('reveal');
   });
 });
 
@@ -944,9 +1062,7 @@ describe('adversarial (#303 hardening)', () => {
   }
 
   it('a tampered redirect_uri at the form POST renders an error, never a redirect', async () => {
-    global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ name: 'Root Team' }), { status: 200 }),
-    ) as typeof fetch;
+    global.fetch = successfulCoolifyPermissionProof();
     const app = makeApp();
     const clientId = registerTestClient(app.provider);
     const { challenge } = pkcePair();
@@ -989,9 +1105,7 @@ describe('adversarial (#303 hardening)', () => {
   });
 
   it('advertises RFC 9207 and echoes iss on the redirect', async () => {
-    global.fetch = jest.fn(
-      async () => new Response(JSON.stringify({ name: 'Root Team' }), { status: 200 }),
-    ) as typeof fetch;
+    global.fetch = successfulCoolifyPermissionProof();
     const app = makeApp();
     const metadata = (await (
       await app.fetch(new Request(`${ISSUER}/.well-known/oauth-authorization-server`))

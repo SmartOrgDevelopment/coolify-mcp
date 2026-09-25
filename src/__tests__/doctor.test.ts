@@ -23,8 +23,9 @@ function jsonResponse(
 
 /**
  * A healthy Coolify 4.1.2: version answers (unauth probe gets 401, auth gets
- * the version string), ability gates let us through with the pre-4.2 shapes,
- * and the routing catch-all has its `docs` key.
+ * the version string), write and deploy ability gates let us through with
+ * their validation-only pre-4.2 shapes, and the routing catch-all has its
+ * `docs` key.
  */
 function healthyFetch(): jest.Mock {
   return jest.fn(async (url: unknown, init?: unknown) => {
@@ -38,6 +39,12 @@ function healthyFetch(): jest.Mock {
     }
     if (path === '/deploy') {
       return jsonResponse(400, { message: 'Invalid uuid.' });
+    }
+    if (path === '/projects') {
+      return jsonResponse(422, {
+        message: 'Validation failed.',
+        errors: { name: ['The name field is required.'] },
+      });
     }
     return jsonResponse(404, { message: 'Not found.', docs: 'https://coolify.io/docs' });
   });
@@ -62,9 +69,7 @@ describe('runDoctor', () => {
     expect(check(report, 'version').status).toBe('pass');
     expect(check(report, 'version').detail).toContain('4.1.2');
     expect(check(report, 'abilities').status).toBe('pass');
-    expect(check(report, 'abilities').detail).toContain('read, deploy');
-    // `write` has no side-effect-free probe — the report must say so, never guess.
-    expect(check(report, 'abilities').detail).toContain('write: not probeable');
+    expect(check(report, 'abilities').detail).toContain('read, write, deploy');
     expect(check(report, 'api-shape').status).toBe('pass');
     expect(check(report, 'runtime').status).toBe('pass');
   });
@@ -154,6 +159,12 @@ describe('runDoctor', () => {
       if (path === '/deploy') {
         return jsonResponse(403, { message: 'Missing required permissions: deploy' });
       }
+      if (path === '/projects') {
+        return jsonResponse(422, {
+          message: 'Validation failed.',
+          errors: { name: ['The name field is required.'] },
+        });
+      }
       return jsonResponse(404, { message: 'Not found.', docs: 'https://coolify.io/docs' });
     });
     const report = await runDoctor(cleanEnv(), fetchMock as unknown as FetchLike);
@@ -162,6 +173,19 @@ describe('runDoctor', () => {
     expect(abilities.status).toBe('warn');
     expect(abilities.detail).toContain('token lacks: deploy');
     expect(abilities.detail).toContain('granted: read');
+  });
+
+  it('does not treat an arbitrary 422 as write permission', async () => {
+    const fetchMock = healthyFetch();
+    fetchMock.mockImplementation(async (url: unknown, init?: unknown) => {
+      const path = String(url).replace(`${BASE}/api/v1`, '');
+      if (path === '/projects') return jsonResponse(422, { message: 'Request blocked.' });
+      return healthyFetch().getMockImplementation()!(url, init) as Promise<Response>;
+    });
+    const report = await runDoctor(cleanEnv(), fetchMock as unknown as FetchLike);
+    const abilities = check(report, 'abilities');
+    expect(abilities.status).toBe('warn');
+    expect(abilities.detail).toContain('write: could not determine');
   });
 
   it('distinguishes the Member-role hard block from missing abilities', async () => {
@@ -367,6 +391,12 @@ describe('runDoctor', () => {
             ? new Response('4.1.2', { status: 200 })
             : jsonResponse(401, { message: 'Unauthenticated.' });
         }
+        if (path === '/projects') {
+          return jsonResponse(422, {
+            message: 'Validation failed.',
+            errors: { name: ['The name field is required.'] },
+          });
+        }
         if (path === '/deploy') return probeAnswer.clone();
         return jsonResponse(404, { message: 'Not found.', docs: 'x' });
       });
@@ -436,13 +466,18 @@ describe('runDoctor', () => {
     expect(runtime.fix).toContain('Node 20+');
   });
 
-  it('only ever sends GET requests — the side-effect-free invariant', async () => {
+  it('uses only GET probes and the validation-only project POST', async () => {
     const fetchMock = healthyFetch();
     await runDoctor(cleanEnv(), fetchMock as unknown as FetchLike);
     expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
     for (const call of fetchMock.mock.calls) {
       const method = (call[1] as RequestInit | undefined)?.method ?? 'GET';
-      expect(method).toBe('GET');
+      if (method === 'POST') {
+        expect(call[0]).toBe(`${BASE}/api/v1/projects`);
+        expect((call[1] as RequestInit).body).toBe('{"name":""}');
+      } else {
+        expect(method).toBe('GET');
+      }
     }
   });
 

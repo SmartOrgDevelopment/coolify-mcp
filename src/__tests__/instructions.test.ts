@@ -7,12 +7,18 @@ const base = {
   fleet: false,
   defaultInstance: 'default',
   readonly: false,
+  allowSensitiveReads: true,
   requireElicitation: false,
 };
 const single = buildInstructions(base);
 const fleet = buildInstructions({ ...base, fleet: true, defaultInstance: 'prod' });
 const readonly = buildInstructions({ ...base, readonly: true, requireElicitation: true });
 const http = buildInstructions({ ...base, requireElicitation: true });
+const restrictedHttp = buildInstructions({
+  ...base,
+  requireElicitation: true,
+  allowSensitiveReads: false,
+});
 const all = { single, fleet, readonly, http };
 
 describe('buildInstructions', () => {
@@ -38,6 +44,11 @@ describe('buildInstructions', () => {
       expect(text).toMatch(/Secrets are masked/);
       expect(text).toContain('`reveal: true`');
     }
+  });
+
+  it('does not advertise plaintext credentials when sensitive reads are disabled', () => {
+    expect(restrictedHttp).toContain('never returns plaintext credentials');
+    expect(restrictedHttp).not.toContain('`reveal: true`');
   });
 
   it('mentions `instance` and the default only in fleet mode', () => {

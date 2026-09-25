@@ -24,15 +24,16 @@ the server will actually do.
 | `reachability` | Coolify answers, with response time                                          | DNS/TLS/connection failures; **Cloudflare Access interception**, named specifically when the wall is a 302 to it |
 | `token`        | Accepted by Coolify                                                          | 401 (bad token), 403 with the Member-role body (read-only role)                                                  |
 | `version`      | Coolify version inside the tested range                                      | An untested Coolify; reported as a warning, not a failure                                                        |
-| `abilities`    | Token grants `read` and `deploy`                                             | A token missing `deploy` (deploy tools will 403); abilities that exceed the team role                            |
+| `abilities`    | Token grants `read`, `write` and `deploy`                                    | Missing permissions and abilities that exceed the team role                                                      |
 | `api-shape`    | The routing catch-all still has the shape the v4.2 method fallback relies on | An upstream change that would silently break pre-4.2 compatibility                                               |
 | `runtime`      | Node 20 or later                                                             | An older Node                                                                                                    |
 
 Every probe is side-effect free. `read` is proven by the token check; `deploy`
 is probed through the ability-gated `GET /deploy` with no parameters, so no
-controller can act. `write` has no safe probe (Coolify has neither token
-introspection nor a write-gated GET), so doctor reports it as undetermined
-rather than guessing.
+controller can act. `write` is probed with `POST /projects` and `{"name":""}`: after the
+write middleware, Coolify rejects the empty required `name` with its exact
+validation response, so no project is created. Any other response is reported
+as undetermined rather than treated as permission.
 
 Each check reports one of `pass`, `warn`, `fail`, `skipped` or `inconclusive`.
 Network probes time out after 10 seconds each.
